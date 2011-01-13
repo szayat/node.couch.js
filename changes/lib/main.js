@@ -4,11 +4,14 @@ var request = require('request')
   , path = require('path')
   , querystring = require('querystring')
   , child = require('child_process')
+  , url = require('url')
   ;
 
 var headers = {'content-type':'application/json', 'accept':'application/json'}
 
 function createDatabaseListener (uri, db) {
+  var parsedUri = url.parse(uri);
+  var didExist = !! db ;
   if (!db) db = {
       ddocs : {}
     , ids : []
@@ -18,7 +21,7 @@ function createDatabaseListener (uri, db) {
         db.onDesignDoc(change.doc);
       } 
       db.ids.forEach(function (id) {
-        db.ddocs[id]._changes_process().stdin.write(JSON.stringify(["change", change])+'\n');
+        db.ddocs[id]._changes_process().stdin.write(JSON.stringify(["change", change, uri ])+'\n');
       })
     }
     , onDesignDoc: function (doc) {
@@ -46,13 +49,13 @@ function createDatabaseListener (uri, db) {
       }
     }
   };
-  
+
   var changesStream = new events.EventEmitter();
   changesStream.write = function (chunk) {
     var line;
     changesStream.buffer += chunk.toString();
     while (changesStream.buffer.indexOf('\n') !== -1) {
-      line = chunk.slice(0, changesStream.buffer.indexOf('\n'));
+      line = changesStream.buffer.slice(0, changesStream.buffer.indexOf('\n'));
       if (line.length > 1) db.onChange(JSON.parse(line));
       changesStream.buffer = changesStream.buffer.slice(changesStream.buffer.indexOf('\n') + 1)
     }
@@ -63,11 +66,21 @@ function createDatabaseListener (uri, db) {
     
     var qs;
     if (error) throw error;
-    if (resp.statusCode > 299) throw new Error("Response error "+sys.inspect(resp)+'\n'+body);
+    if (resp.statusCode > 299) {
+      // deal with deleted databases
+      var b = JSON.parse(body);
+      if ( didExist && body.error == "not_found" && body.reason == "no_db_file" ) {
+        sys.debug('database deleted: ' + uri );
+        return null;
+      }
+      else 
+        throw new Error("Response error "+sys.inspect(resp)+'\n'+body);
+    }
     if (!db.seq) db.seq = JSON.parse(body).update_seq
     qs = querystring.stringify({include_docs: "true", feed: 'continuous', since: db.seq})
     request({uri:uri+'/_changes?'+qs, responseBodyStream:changesStream}, function (err, resp, body) {
-      sys.debug("FUCK")
+      if ( err ) 
+        sys.debug(JSON.stringify(err));
     });
     request({uri:uri+'/_all_docs?startkey=%22_design%2F%22&endkey=%22_design0%22&include_docs=true'}, 
       function (err, resp, body) {
@@ -95,7 +108,11 @@ function createService (uri, interval) {
       JSON.parse(body).forEach(function (db) {
         if (!dbs[db]) {
           dbs[db] = createDatabaseListener(uri+db);
-          if (service.onDatabase) server.onDatabase(db, dbs[db])
+          // deal with deleted database. TODO: I'm I leaking memory somewhere??
+          if ( ! dbs[db] )
+            delete deb[db];
+          else
+            if (service.onDatabase) server.onDatabase(db, dbs[db]);
         }
       })
       var endtime = new Date();

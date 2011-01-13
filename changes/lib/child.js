@@ -25,9 +25,9 @@ stdin.on('data', function (chunk) {
     buffer = buffer.slice(buffer.indexOf('\n') + 1);  
     var obj = JSON.parse(line);
     if ((obj[0]) === "ddoc") {
-      listener = loadModule(obj[1]);
+      listener = loadModule(obj[1]).listener;
     } else if (obj[0] === "change") {
-      listener(obj[1]);
+      listener(obj[1],obj[2]);
     }
   }
 });
